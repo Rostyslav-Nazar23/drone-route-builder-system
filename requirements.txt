@@ -1,0 +1,14 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+shapely==2.0.2
+geopandas==0.14.1
+networkx==3.2.1
+numpy==1.26.2
+scipy==1.11.4
+folium==0.15.1
+streamlit==1.28.2
+streamlit-folium==0.15.1
+python-multipart==0.0.6
+requests==2.31.0
+
