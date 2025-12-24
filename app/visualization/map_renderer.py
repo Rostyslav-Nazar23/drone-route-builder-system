@@ -6,6 +6,7 @@ from app.domain.route import Route
 from app.domain.waypoint import Waypoint
 from app.domain.constraints import MissionConstraints, NoFlyZone
 from app.domain.mission import Mission
+from app.weather.weather_provider import WeatherConditions
 
 
 class MapRenderer:
@@ -149,10 +150,106 @@ class MapRenderer:
             color = colors[idx % len(colors)]
             self._add_route_to_map(m, route, color)
         
+        # Add weather visualization if available
+        if weather_data:
+            self._add_weather_visualization(m, weather_data)
+        
         # Add layer control
         folium.LayerControl().add_to(m)
         
         return m
+    
+    def _add_weather_visualization(self, m: folium.Map, weather_data: Dict[tuple[float, float], WeatherConditions]):
+        """Add weather visualization to map.
+        
+        Args:
+            m: Folium map
+            weather_data: Dictionary mapping (lat, lon) to WeatherConditions
+        """
+        # Create weather layer
+        weather_group = folium.FeatureGroup(name="Weather Conditions")
+        
+        for (lat, lon), weather in weather_data.items():
+            # Determine marker color based on conditions
+            color = self._get_weather_color(weather)
+            icon = self._get_weather_icon(weather)
+            
+            # Create popup with weather info
+            popup_html = f"""
+            <div style="font-family: Arial; width: 200px;">
+                <h4>🌤️ Weather Conditions</h4>
+                <p><b>Wind:</b> {weather.wind_speed_10m:.1f} m/s @ {weather.wind_direction_10m:.0f}°</p>
+                <p><b>Temperature:</b> {weather.temperature_2m:.1f}°C</p>
+                <p><b>Precipitation:</b> {weather.precipitation:.1f} mm</p>
+                <p><b>Cloud Cover:</b> {weather.cloud_cover:.0f}%</p>
+                {f'<p><b>Visibility:</b> {weather.visibility:.1f} km</p>' if weather.visibility else ''}
+            </div>
+            """
+            
+            # Add marker
+            folium.Marker(
+                location=[lat, lon],
+                popup=folium.Popup(popup_html, max_width=250),
+                icon=folium.Icon(color=color, icon=icon, prefix="fa"),
+                tooltip=f"Wind: {weather.wind_speed_10m:.1f} m/s"
+            ).add_to(weather_group)
+            
+            # Add wind direction arrow
+            self._add_wind_arrow(m, lat, lon, weather.wind_direction_10m, weather.wind_speed_10m)
+        
+        weather_group.add_to(m)
+    
+    def _get_weather_color(self, weather: WeatherConditions) -> str:
+        """Get marker color based on weather conditions."""
+        # Red for unsafe conditions
+        if weather.wind_speed_10m > 15 or weather.precipitation > 5:
+            return "red"
+        # Orange for marginal conditions
+        elif weather.wind_speed_10m > 10 or weather.precipitation > 2:
+            return "orange"
+        # Green for good conditions
+        else:
+            return "green"
+    
+    def _get_weather_icon(self, weather: WeatherConditions) -> str:
+        """Get icon based on weather conditions."""
+        if weather.precipitation > 0:
+            return "cloud-rain"
+        elif weather.cloud_cover > 80:
+            return "cloud"
+        elif weather.cloud_cover > 50:
+            return "cloud-sun"
+        else:
+            return "sun"
+    
+    def _add_wind_arrow(self, m: folium.Map, lat: float, lon: float, 
+                       direction: float, speed: float):
+        """Add wind direction arrow to map.
+        
+        Args:
+            m: Folium map
+            lat: Latitude
+            lon: Longitude
+            direction: Wind direction in degrees
+            speed: Wind speed in m/s
+        """
+        import math
+        
+        # Calculate arrow endpoint
+        arrow_length = min(speed * 0.001, 0.01)  # Scale arrow length
+        direction_rad = math.radians(direction)
+        
+        end_lat = lat + arrow_length * math.cos(direction_rad)
+        end_lon = lon + arrow_length * math.sin(direction_rad)
+        
+        # Create arrow
+        folium.PolyLine(
+            locations=[[lat, lon], [end_lat, end_lon]],
+            color="blue",
+            weight=2,
+            opacity=0.6,
+            tooltip=f"Wind: {speed:.1f} m/s @ {direction:.0f}°"
+        ).add_to(m)
     
     def _add_no_fly_zone(self, m: folium.Map, zone: NoFlyZone):
         """Add no-fly zone to map."""

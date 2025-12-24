@@ -22,7 +22,9 @@ class MissionOrchestrator:
         self.planner = RoutePlanner(mission, weather_data)
         self.checker = ConstraintChecker()
     
-    def plan_mission(self, use_grid: bool = True, use_weather: bool = True) -> Dict[str, Route]:
+    def plan_mission(self, use_grid: bool = True, use_weather: bool = True,
+                    algorithm: str = "astar", use_vrp: bool = True,
+                    use_genetic: bool = False) -> Dict[str, Route]:
         """Plan complete mission.
         
         Args:
@@ -35,12 +37,26 @@ class MissionOrchestrator:
         
         if len(self.mission.drones) == 1:
             # Single drone mission
-            route = self.planner.plan_single_drone_route(self.mission.drones[0], use_grid)
+            route = self.planner.plan_single_drone_route(
+                self.mission.drones[0], 
+                use_grid=use_grid,
+                algorithm=algorithm
+            )
             if route:
                 routes[self.mission.drones[0].name] = route
         else:
             # Multi-drone mission
-            routes = self.planner.plan_multi_drone_routes()
+            routes = self.planner.plan_multi_drone_routes(use_vrp=use_vrp)
+        
+        # Optimize routes with genetic algorithm if requested
+        if use_genetic:
+            from app.optimization.mission_optimizer import MissionOptimizer
+            optimizer = MissionOptimizer(self.mission)
+            # Temporarily store routes for optimization
+            for drone_name, route in routes.items():
+                self.mission.add_route(drone_name, route)
+            optimized_routes = optimizer.optimize_routes(use_genetic=True)
+            routes = optimized_routes
         
         # Validate routes
         for drone_name, route in routes.items():

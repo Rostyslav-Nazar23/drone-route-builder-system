@@ -11,4 +11,8 @@ streamlit==1.28.2
 streamlit-folium==0.15.1
 python-multipart==0.0.6
 requests==2.31.0
+ortools==9.8.3296
+sqlalchemy==2.0.23
+geoalchemy2==0.14.2
+psycopg2-binary==2.9.9
 

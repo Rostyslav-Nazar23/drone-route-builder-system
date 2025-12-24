@@ -6,6 +6,8 @@ from app.domain.drone import Drone
 from app.environment.graph_builder import GraphBuilder
 from app.environment.navigation_graph import NavigationGraph
 from app.planning.a_star import AStar
+from app.planning.theta_star import ThetaStar
+from app.planning.d_star import DStar
 from app.weather.weather_provider import WeatherConditions
 
 
@@ -22,7 +24,8 @@ class RoutePlanner:
         self.mission = mission
         self.weather_data = weather_data
     
-    def plan_single_drone_route(self, drone: Drone, use_grid: bool = True) -> Optional[Route]:
+    def plan_single_drone_route(self, drone: Drone, use_grid: bool = True, 
+                               algorithm: str = "astar") -> Optional[Route]:
         """Plan route for a single drone.
         
         Args:
@@ -86,8 +89,13 @@ class RoutePlanner:
         if not start_node or not target_nodes:
             return None
         
-        # Use A* to find path
-        a_star = AStar(graph)
+        # Select pathfinding algorithm
+        if algorithm == "thetastar":
+            pathfinder = ThetaStar(graph)
+        elif algorithm == "dstar":
+            pathfinder = DStar(graph)
+        else:  # default to astar
+            pathfinder = AStar(graph)
         
         # If we need to return to depot
         if self.mission.constraints and self.mission.constraints.require_return_to_depot:
@@ -103,19 +111,19 @@ class RoutePlanner:
             end_node = target_nodes[-1] if target_nodes else None
         
         # Find path visiting all targets
-        path_nodes = a_star.find_path_to_waypoints(start_node, target_nodes)
+        path_nodes = pathfinder.find_path_to_waypoints(start_node, target_nodes)
         
         if not path_nodes:
             return None
         
         # Convert to route
-        waypoints = a_star.path_to_waypoints(path_nodes)
+        waypoints = pathfinder.path_to_waypoints(path_nodes)
         route = Route(waypoints=waypoints, drone_name=drone.name)
         route.calculate_metrics(drone)
         
         return route
     
-    def plan_multi_drone_routes(self) -> dict[str, Route]:
+    def plan_multi_drone_routes(self, use_vrp: bool = True) -> dict[str, Route]:
         """Plan routes for multiple drones (simple assignment).
         
         Returns:
@@ -126,33 +134,56 @@ class RoutePlanner:
         if not self.mission.drones or not self.mission.target_points:
             return routes
         
-        # Simple assignment: divide targets evenly among drones
-        targets_per_drone = len(self.mission.target_points) // len(self.mission.drones)
-        remainder = len(self.mission.target_points) % len(self.mission.drones)
-        
-        target_idx = 0
-        for drone_idx, drone in enumerate(self.mission.drones):
-            # Assign targets to this drone
-            num_targets = targets_per_drone + (1 if drone_idx < remainder else 0)
-            drone_targets = self.mission.target_points[target_idx:target_idx + num_targets]
+        if use_vrp and len(self.mission.drones) > 1:
+            # Use VRP solver for optimal assignment
+            from app.optimization.vrp_solver import VRPSolver
+            vrp_solver = VRPSolver(self.mission)
+            assignments = vrp_solver.solve()
             
-            # Create temporary mission for this drone
-            temp_mission = Mission(
-                name=f"{self.mission.name}_drone_{drone.name}",
-                drones=[drone],
-                target_points=drone_targets,
-                depot=self.mission.depot,
-                constraints=self.mission.constraints
-            )
+            # Plan routes for each drone based on VRP assignment
+            for drone in self.mission.drones:
+                target_indices = assignments.get(drone.name, [])
+                drone_targets = [self.mission.target_points[i] for i in target_indices if i < len(self.mission.target_points)]
+                
+                if drone_targets:
+                    temp_mission = Mission(
+                        name=f"{self.mission.name}_drone_{drone.name}",
+                        drones=[drone],
+                        target_points=drone_targets,
+                        depot=self.mission.depot,
+                        constraints=self.mission.constraints
+                    )
+                    
+                    planner = RoutePlanner(temp_mission, self.weather_data)
+                    route = planner.plan_single_drone_route(drone)
+                    
+                    if route:
+                        routes[drone.name] = route
+        else:
+            # Simple assignment: divide targets evenly among drones
+            targets_per_drone = len(self.mission.target_points) // len(self.mission.drones)
+            remainder = len(self.mission.target_points) % len(self.mission.drones)
             
-            # Plan route
-            planner = RoutePlanner(temp_mission, self.weather_data)
-            route = planner.plan_single_drone_route(drone)
-            
-            if route:
-                routes[drone.name] = route
-            
-            target_idx += num_targets
+            target_idx = 0
+            for drone_idx, drone in enumerate(self.mission.drones):
+                num_targets = targets_per_drone + (1 if drone_idx < remainder else 0)
+                drone_targets = self.mission.target_points[target_idx:target_idx + num_targets]
+                
+                temp_mission = Mission(
+                    name=f"{self.mission.name}_drone_{drone.name}",
+                    drones=[drone],
+                    target_points=drone_targets,
+                    depot=self.mission.depot,
+                    constraints=self.mission.constraints
+                )
+                
+                planner = RoutePlanner(temp_mission, self.weather_data)
+                route = planner.plan_single_drone_route(drone)
+                
+                if route:
+                    routes[drone.name] = route
+                
+                target_idx += num_targets
         
         return routes
 

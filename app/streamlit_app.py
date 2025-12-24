@@ -212,6 +212,20 @@ with st.sidebar:
     st.subheader("Planning Options")
     use_grid = st.checkbox("Use Grid Graph", value=True)
     
+    # Algorithm selection
+    algorithm = st.selectbox(
+        "Pathfinding Algorithm",
+        ["astar", "thetastar", "dstar"],
+        index=0,
+        help="A*: Standard pathfinding\nTheta*: Any-angle pathfinding\nD*: Dynamic replanning"
+    )
+    
+    # Optimization options
+    use_vrp = st.checkbox("Use VRP for Multi-Drone", value=True, 
+                         help="Use Vehicle Routing Problem solver for optimal target assignment")
+    use_genetic = st.checkbox("Use Genetic Algorithm Optimization", value=False,
+                              help="Optimize routes using genetic algorithm (slower but better results)")
+    
     if st.button("Plan Route", type="primary"):
         if st.session_state.mission is None or not st.session_state.mission.target_points:
             st.error("Please add target points first")
@@ -219,7 +233,13 @@ with st.sidebar:
             with st.spinner("Planning route..."):
                 weather_data = st.session_state.weather_data if st.session_state.use_weather else None
                 orchestrator = MissionOrchestrator(st.session_state.mission, weather_data)
-                routes = orchestrator.plan_mission(use_grid=use_grid, use_weather=st.session_state.use_weather)
+                routes = orchestrator.plan_mission(
+                    use_grid=use_grid, 
+                    use_weather=st.session_state.use_weather,
+                    algorithm=algorithm,
+                    use_vrp=use_vrp,
+                    use_genetic=use_genetic
+                )
                 st.session_state.routes = routes
                 st.success("Route planned successfully!")
                 st.rerun()
@@ -240,7 +260,8 @@ if st.session_state.mission:
     # Map visualization
     st.subheader("Mission Map")
     renderer = MapRenderer()
-    map_obj = renderer.render_mission(mission)
+    weather_data = st.session_state.weather_data if st.session_state.use_weather else None
+    map_obj = renderer.render_mission(mission, weather_data=weather_data)
     
     # Display map
     map_data = st_folium(map_obj, width=1200, height=600)

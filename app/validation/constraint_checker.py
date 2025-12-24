@@ -6,6 +6,7 @@ from app.domain.constraints import MissionConstraints
 from app.validation.zone_checker import ZoneChecker
 from app.validation.altitude_checker import AltitudeChecker
 from app.validation.energy_checker import EnergyChecker
+from app.validation.kinematics_checker import KinematicsChecker
 
 
 class ValidationResult:
@@ -50,6 +51,7 @@ class ConstraintChecker:
         self.zone_checker = ZoneChecker()
         self.altitude_checker = AltitudeChecker()
         self.energy_checker = EnergyChecker()
+        self.kinematics_checker = KinematicsChecker()
     
     def validate_route(self, route: Route, drone: Drone, 
                       constraints: Optional[MissionConstraints] = None) -> ValidationResult:
@@ -86,6 +88,12 @@ class ConstraintChecker:
             result.add_violation("energy", energy_result["message"])
         if energy_result.get("warning"):
             result.add_warning("energy", energy_result["warning"])
+        
+        # Check kinematics (Dubins Airplane)
+        kinematics_result = self.kinematics_checker.check_route(route, drone)
+        if not kinematics_result["is_valid"]:
+            for violation in kinematics_result.get("violations", []):
+                result.add_violation("kinematics", violation["message"], None)
         
         return result
 
