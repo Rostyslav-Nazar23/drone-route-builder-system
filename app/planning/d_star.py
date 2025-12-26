@@ -101,11 +101,35 @@ class DStar:
                 
                 # Update neighbors
                 for neighbor in self.graph.get_neighbors(u):
+                    # Additional safety check: verify edge is still valid (includes no-fly zone check)
+                    if hasattr(self.graph, 'cost_model') and self.graph.cost_model:
+                        pos1 = self.graph.get_node_position(u)
+                        pos2 = self.graph.get_node_position(neighbor)
+                        is_valid, _ = self.graph.cost_model.is_valid_edge(
+                            pos1[1], pos1[0], pos1[2],  # lat, lon, alt
+                            pos2[1], pos2[0], pos2[2],
+                            is_start_ground=False,
+                            is_end_ground=False
+                        )
+                        if not is_valid:
+                            continue  # Skip this edge if it's invalid (e.g., intersects no-fly zone)
                     self._update_vertex(neighbor)
             else:
                 self.g_score[u] = float('inf')
                 self._update_vertex(u)
                 for neighbor in self.graph.get_neighbors(u):
+                    # Additional safety check: verify edge is still valid (includes no-fly zone check)
+                    if hasattr(self.graph, 'cost_model') and self.graph.cost_model:
+                        pos1 = self.graph.get_node_position(u)
+                        pos2 = self.graph.get_node_position(neighbor)
+                        is_valid, _ = self.graph.cost_model.is_valid_edge(
+                            pos1[1], pos1[0], pos1[2],  # lat, lon, alt
+                            pos2[1], pos2[0], pos2[2],
+                            is_start_ground=False,
+                            is_end_ground=False
+                        )
+                        if not is_valid:
+                            continue  # Skip this edge if it's invalid (e.g., intersects no-fly zone)
                     self._update_vertex(neighbor)
     
     def _update_vertex(self, node: str):
@@ -114,7 +138,32 @@ class DStar:
             # Calculate minimum rhs from neighbors
             min_rhs = float('inf')
             for neighbor in self.graph.get_neighbors(node):
-                cost = self.graph.get_edge_weight(neighbor, node)
+                # Additional safety check: verify edge is still valid (includes no-fly zone check)
+                if hasattr(self.graph, 'cost_model') and self.graph.cost_model:
+                    pos1 = self.graph.get_node_position(neighbor)
+                    pos2 = self.graph.get_node_position(node)
+                    is_valid, _ = self.graph.cost_model.is_valid_edge(
+                        pos1[1], pos1[0], pos1[2],  # lat, lon, alt
+                        pos2[1], pos2[0], pos2[2],
+                        is_start_ground=False,
+                        is_end_ground=False
+                    )
+                    if not is_valid:
+                        continue  # Skip this edge if it's invalid (e.g., intersects no-fly zone)
+                
+                # Estimate current speed at neighbor for inertia calculation
+                # In D*, we estimate speed based on distance from start
+                estimated_speed = 0.0
+                if hasattr(self.graph, 'cost_model') and self.graph.cost_model:
+                    # Estimate speed based on g_score (cost from start)
+                    # Higher g_score means more distance traveled, likely higher speed
+                    max_speed = self.graph.cost_model.drone.max_speed
+                    if self.g_score.get(neighbor, float('inf')) < float('inf'):
+                        # Rough estimate: if we've traveled far, we're likely at higher speed
+                        # This is a simplified heuristic
+                        estimated_speed = min(max_speed, max_speed * 0.7)  # Assume 70% of max speed
+                
+                cost = self.graph.get_edge_weight(neighbor, node, current_speed=estimated_speed)
                 candidate_rhs = self.g_score[neighbor] + cost
                 if candidate_rhs < min_rhs:
                     min_rhs = candidate_rhs
@@ -202,7 +251,29 @@ class DStar:
                 if neighbor in path:  # Avoid cycles
                     continue
                 
-                cost = self.graph.get_edge_weight(current, neighbor)
+                # Additional safety check: verify edge is still valid (includes no-fly zone check)
+                if hasattr(self.graph, 'cost_model') and self.graph.cost_model:
+                    pos1 = self.graph.get_node_position(current)
+                    pos2 = self.graph.get_node_position(neighbor)
+                    is_valid, _ = self.graph.cost_model.is_valid_edge(
+                        pos1[1], pos1[0], pos1[2],  # lat, lon, alt
+                        pos2[1], pos2[0], pos2[2],
+                        is_start_ground=False,
+                        is_end_ground=False
+                    )
+                    if not is_valid:
+                        continue  # Skip this edge if it's invalid (e.g., intersects no-fly zone)
+                
+                # Estimate current speed at current node for inertia calculation
+                estimated_speed = 0.0
+                if hasattr(self.graph, 'cost_model') and self.graph.cost_model:
+                    # Estimate speed based on g_score (cost from start)
+                    max_speed = self.graph.cost_model.drone.max_speed
+                    if self.g_score.get(current, float('inf')) < float('inf'):
+                        # Rough estimate: assume we're at 70% of max speed after traveling
+                        estimated_speed = min(max_speed, max_speed * 0.7)
+                
+                cost = self.graph.get_edge_weight(current, neighbor, current_speed=estimated_speed)
                 total_cost = self.g_score.get(neighbor, float('inf')) + cost
                 
                 if total_cost < best_cost:
@@ -239,6 +310,37 @@ class DStar:
         alt_m = alt2 - alt1
         
         return math.sqrt(lat_m ** 2 + lon_m ** 2 + alt_m ** 2)
+    
+    def find_path_to_waypoints(self, start_node: str, waypoint_nodes: List[str]) -> Optional[List[str]]:
+        """Find path visiting multiple waypoints in order.
+        
+        Args:
+            start_node: Start node ID
+            waypoint_nodes: List of waypoint node IDs to visit
+        
+        Returns:
+            Combined path, or None if any segment fails
+        """
+        if not waypoint_nodes:
+            return [start_node]
+        
+        full_path = []
+        current = start_node
+        
+        for waypoint in waypoint_nodes:
+            segment = self.find_path(current, waypoint)
+            if segment is None:
+                return None
+            
+            # Add segment (avoid duplicating the current node)
+            if full_path:
+                full_path.extend(segment[1:])  # Skip first node (already in path)
+            else:
+                full_path.extend(segment)
+            
+            current = waypoint
+        
+        return full_path
     
     def path_to_waypoints(self, path_nodes: List[str]) -> List[Waypoint]:
         """Convert path node IDs to Waypoint objects."""

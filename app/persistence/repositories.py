@@ -2,6 +2,7 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from datetime import datetime
 from app.persistence.models import (
     MissionModel, DroneModel, TargetPointModel, RouteModel,
     RouteWaypointModel, ConstraintsModel, NoFlyZoneModel
@@ -93,6 +94,25 @@ class MissionRepository:
             )
             self.db.add(depot_model)
         
+        # Add finish point if exists (as target point with type "finish")
+        if mission.finish_point:
+            point = Point(mission.finish_point.longitude, mission.finish_point.latitude)
+            finish_model = TargetPointModel(
+                id=uuid.uuid4(),
+                mission_id=mission_model.id,
+                name=mission.finish_point.name,
+                latitude=mission.finish_point.latitude,
+                longitude=mission.finish_point.longitude,
+                altitude=mission.finish_point.altitude,
+                waypoint_type="finish",
+                location=from_shape(point, srid=4326)
+            )
+            self.db.add(finish_model)
+        
+        # Set finish_point_type and landing_mode
+        mission_model.finish_point_type = mission.finish_point_type
+        mission_model.landing_mode = mission.landing_mode
+        
         # Add constraints
         if mission.constraints:
             constraints_model = ConstraintsModel(
@@ -165,9 +185,10 @@ class MissionRepository:
         # Load relationships
         drones = [self._drone_to_domain(d) for d in mission_model.drones]
         
-        # Get target points and depot
+        # Get target points, depot, and finish point
         target_points = []
         depot = None
+        finish_point = None
         for tp in mission_model.target_points:
             wp = Waypoint(
                 latitude=tp.latitude,
@@ -178,6 +199,8 @@ class MissionRepository:
             )
             if tp.waypoint_type == "depot":
                 depot = wp
+            elif tp.waypoint_type == "finish":
+                finish_point = wp
             else:
                 target_points.append(wp)
         
@@ -207,6 +230,9 @@ class MissionRepository:
             drones=drones,
             target_points=target_points,
             depot=depot,
+            finish_point=finish_point,
+            finish_point_type=getattr(mission_model, 'finish_point_type', 'depot'),
+            landing_mode=getattr(mission_model, 'landing_mode', 'vertical'),
             constraints=constraints,
             created_at=mission_model.created_at,
             updated_at=mission_model.updated_at
@@ -243,7 +269,8 @@ class MissionRepository:
                 latitude=wp_model.latitude,
                 longitude=wp_model.longitude,
                 altitude=wp_model.altitude,
-                name=wp_model.name
+                name=wp_model.name,
+                waypoint_type=getattr(wp_model, 'waypoint_type', 'intermediate')
             )
             waypoints.append(waypoint)
         
@@ -260,7 +287,9 @@ class MissionRepository:
                 total_energy=route_model.total_energy or 0.0,
                 max_altitude=route_model.max_altitude or 0.0,
                 min_altitude=route_model.min_altitude or 0.0,
-                waypoint_count=route_model.waypoint_count or 0
+                waypoint_count=route_model.waypoint_count or 0,
+                risk_score=getattr(route_model, 'risk_score', None) or 0.0,
+                avg_speed=getattr(route_model, 'avg_speed', None) or 0.0
             )
         
         return route
@@ -283,6 +312,8 @@ class MissionRepository:
             max_altitude=route.metrics.max_altitude if route.metrics else None,
             min_altitude=route.metrics.min_altitude if route.metrics else None,
             waypoint_count=route.metrics.waypoint_count if route.metrics else None,
+            risk_score=route.metrics.risk_score if route.metrics else None,
+            avg_speed=route.metrics.avg_speed if route.metrics else None,
             validation_result=route.validation_result
         )
         self.db.add(route_model)
@@ -298,11 +329,168 @@ class MissionRepository:
                 longitude=waypoint.longitude,
                 altitude=waypoint.altitude,
                 name=waypoint.name,
+                waypoint_type=getattr(waypoint, 'waypoint_type', 'intermediate'),
                 location=from_shape(point, srid=4326)
             )
             self.db.add(wp_model)
         
         self.db.commit()
+    
+    def update(self, mission: Mission, mission_id: Optional[uuid.UUID] = None) -> MissionModel:
+        """Update existing mission in database.
+        
+        Args:
+            mission: Mission domain object
+            mission_id: Mission UUID (if None, will try to find by name)
+        
+        Returns:
+            Updated MissionModel instance
+        """
+        # Find existing mission
+        if mission_id:
+            mission_model = self.get_by_id(mission_id)
+        else:
+            mission_model = self.get_by_name(mission.name)
+        
+        if not mission_model:
+            # Mission doesn't exist, create new one
+            return self.create(mission)
+        
+        # Update mission fields
+        mission_model.name = mission.name
+        mission_model.finish_point_type = mission.finish_point_type
+        mission_model.landing_mode = mission.landing_mode
+        mission_model.updated_at = datetime.now()
+        
+        # Delete existing routes and create new ones
+        for route_model in mission_model.routes:
+            self.db.delete(route_model)
+        
+        # Update or recreate drones, target points, constraints
+        # For simplicity, delete and recreate (could be optimized)
+        for drone_model in mission_model.drones:
+            self.db.delete(drone_model)
+        for target_model in mission_model.target_points:
+            self.db.delete(target_model)
+        if mission_model.constraints:
+            for zone_model in mission_model.constraints.no_fly_zones:
+                self.db.delete(zone_model)
+            self.db.delete(mission_model.constraints)
+        
+        # Recreate all data
+        # Add drones
+        for drone in mission.drones:
+            drone_model = DroneModel(
+                id=uuid.uuid4(),
+                mission_id=mission_model.id,
+                name=drone.name,
+                max_speed=drone.max_speed,
+                max_altitude=drone.max_altitude,
+                min_altitude=drone.min_altitude,
+                battery_capacity=drone.battery_capacity,
+                power_consumption=drone.power_consumption,
+                max_flight_time=drone.max_flight_time,
+                max_range=drone.max_range,
+                turn_radius=drone.turn_radius,
+                climb_rate=drone.climb_rate,
+                descent_rate=drone.descent_rate
+            )
+            self.db.add(drone_model)
+        
+        # Add target points
+        for target in mission.target_points:
+            point = Point(target.longitude, target.latitude)
+            target_model = TargetPointModel(
+                id=uuid.uuid4(),
+                mission_id=mission_model.id,
+                name=target.name,
+                latitude=target.latitude,
+                longitude=target.longitude,
+                altitude=target.altitude,
+                waypoint_type=target.waypoint_type,
+                location=from_shape(point, srid=4326)
+            )
+            self.db.add(target_model)
+        
+        # Add depot if exists
+        if mission.depot:
+            point = Point(mission.depot.longitude, mission.depot.latitude)
+            depot_model = TargetPointModel(
+                id=uuid.uuid4(),
+                mission_id=mission_model.id,
+                name=mission.depot.name,
+                latitude=mission.depot.latitude,
+                longitude=mission.depot.longitude,
+                altitude=mission.depot.altitude,
+                waypoint_type="depot",
+                location=from_shape(point, srid=4326)
+            )
+            self.db.add(depot_model)
+        
+        # Add finish point if exists
+        if mission.finish_point:
+            point = Point(mission.finish_point.longitude, mission.finish_point.latitude)
+            finish_model = TargetPointModel(
+                id=uuid.uuid4(),
+                mission_id=mission_model.id,
+                name=mission.finish_point.name,
+                latitude=mission.finish_point.latitude,
+                longitude=mission.finish_point.longitude,
+                altitude=mission.finish_point.altitude,
+                waypoint_type="finish",
+                location=from_shape(point, srid=4326)
+            )
+            self.db.add(finish_model)
+        
+        # Add constraints
+        if mission.constraints:
+            constraints_model = ConstraintsModel(
+                id=uuid.uuid4(),
+                mission_id=mission_model.id,
+                max_altitude=mission.constraints.max_altitude,
+                min_altitude=mission.constraints.min_altitude,
+                max_distance=mission.constraints.max_distance,
+                max_flight_time=mission.constraints.max_flight_time,
+                require_return_to_depot=mission.constraints.require_return_to_depot
+            )
+            self.db.add(constraints_model)
+            
+            # Add no-fly zones
+            for zone in mission.constraints.no_fly_zones:
+                zone_model = NoFlyZoneModel(
+                    id=uuid.uuid4(),
+                    constraints_id=constraints_model.id,
+                    name=zone.name,
+                    min_altitude=zone.min_altitude,
+                    max_altitude=zone.max_altitude,
+                    geometry=from_shape(zone.geometry, srid=4326)
+                )
+                self.db.add(zone_model)
+        
+        # Save routes
+        for drone_name, route in mission.routes.items():
+            self.save_route(mission_model.id, route, drone_name)
+        
+        self.db.commit()
+        self.db.refresh(mission_model)
+        
+        return mission_model
+    
+    def save_or_create(self, mission: Mission) -> MissionModel:
+        """Save mission to database (create if new, update if exists).
+        
+        Args:
+            mission: Mission domain object
+        
+        Returns:
+            MissionModel instance
+        """
+        # Try to find existing mission by name
+        existing = self.get_by_name(mission.name)
+        if existing:
+            return self.update(mission, existing.id)
+        else:
+            return self.create(mission)
     
     def delete(self, mission_id: uuid.UUID):
         """Delete mission.

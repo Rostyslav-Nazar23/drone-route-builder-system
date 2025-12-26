@@ -1,0 +1,27 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Example No-Fly Zone",
+        "min_altitude": 0.0,
+        "max_altitude": 1000.0,
+        "description": "No-fly zone between Target 2 (50.01, 30.01) and Target 3 (50.02, 30.0)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [30.002, 50.012],
+            [30.006, 50.012],
+            [30.006, 50.016],
+            [30.002, 50.016],
+            [30.002, 50.012]
+          ]
+        ]
+      }
+    }
+  ]
+}
+

@@ -32,19 +32,29 @@ class MissionConstraints:
     min_altitude: Optional[float] = None  # meters, global min altitude
     max_distance: Optional[float] = None  # meters, max distance from start
     max_flight_time: Optional[float] = None  # seconds
-    require_return_to_depot: bool = True
+    require_return_to_depot: bool = True  # Deprecated: use Mission.finish_point_type instead
     
     def add_no_fly_zone(self, zone: NoFlyZone):
         """Add a no-fly zone."""
         self.no_fly_zones.append(zone)
     
-    def check_point(self, latitude: float, longitude: float, altitude: float) -> tuple[bool, Optional[str]]:
-        """Check if a point violates constraints. Returns (is_valid, error_message)."""
+    def check_point(self, latitude: float, longitude: float, altitude: float, 
+                   is_ground_point: bool = False) -> tuple[bool, Optional[str]]:
+        """Check if a point violates constraints. Returns (is_valid, error_message).
+        
+        Args:
+            latitude: Point latitude
+            longitude: Point longitude
+            altitude: Point altitude
+            is_ground_point: If True, skip minimum altitude checks (for depot/finish points)
+        """
         point = Point(longitude, latitude)
         
         # Check altitude constraints
-        if self.min_altitude is not None and altitude < self.min_altitude:
+        # Skip minimum altitude check for ground points (depot/finish)
+        if not is_ground_point and self.min_altitude is not None and altitude < self.min_altitude:
             return False, f"Altitude {altitude}m is below minimum {self.min_altitude}m"
+        # Always check maximum altitude
         if self.max_altitude is not None and altitude > self.max_altitude:
             return False, f"Altitude {altitude}m is above maximum {self.max_altitude}m"
         

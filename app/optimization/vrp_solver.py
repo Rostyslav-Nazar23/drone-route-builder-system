@@ -21,6 +21,10 @@ class VRPSolver:
         self.depot = mission.depot
         self.targets = mission.target_points
         self.drones = mission.drones
+        
+        # Debug: Ensure we have drones
+        if not self.drones:
+            raise ValueError("VRP solver requires at least one drone")
     
     def solve(self) -> Dict[str, List[int]]:
         """Solve VRP to assign targets to drones.
@@ -29,6 +33,10 @@ class VRPSolver:
             Dictionary mapping drone name to list of target indices
         """
         if not self.targets or not self.drones:
+            return {}
+        
+        # Ensure we have at least one drone
+        if len(self.drones) == 0:
             return {}
         
         # Create distance matrix
@@ -78,6 +86,9 @@ class VRPSolver:
         
         # Set search parameters
         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+        # Use a strategy that tries to use all vehicles
+        # SAVINGS strategy tends to use fewer vehicles, so we use PATH_CHEAPEST_ARC
+        # which is more likely to distribute targets across all vehicles
         search_parameters.first_solution_strategy = (
             routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
         )
@@ -85,6 +96,10 @@ class VRPSolver:
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
         )
         search_parameters.time_limit.seconds = 30
+        
+        # If we have fewer targets than drones, we need to ensure distribution
+        # OR-Tools will naturally try to use all vehicles if beneficial
+        # But if targets < drones, some drones won't get targets (which is expected)
         
         # Solve
         solution = routing.SolveWithParameters(search_parameters)
@@ -99,13 +114,54 @@ class VRPSolver:
             route_indices = []
             index = routing.Start(vehicle_id)
             
-            while not routing.IsEnd(index):
-                node_index = manager.IndexToNode(index)
-                if node_index > 0:  # Skip depot (index 0)
-                    route_indices.append(node_index - 1)  # Convert to target index
-                index = solution.Value(routing.NextVar(index))
+            # Traverse the route for this vehicle
+            # Start from the first node after the start
+            current_index = solution.Value(routing.NextVar(index))
             
-            assignments[drone.name] = route_indices
+            # Check if vehicle has any nodes (not just going from start to end)
+            if routing.IsEnd(current_index):
+                # Vehicle has no targets assigned (empty route)
+                assignments[drone.name] = []
+            else:
+                # Follow the route
+                while not routing.IsEnd(current_index):
+                    node_index = manager.IndexToNode(current_index)
+                    if node_index > 0:  # Skip depot (index 0)
+                        route_indices.append(node_index - 1)  # Convert to target index
+                    current_index = solution.Value(routing.NextVar(current_index))
+                
+                assignments[drone.name] = route_indices
+        
+        # Ensure all drones are in assignments (even if empty)
+        for drone in self.drones:
+            if drone.name not in assignments:
+                assignments[drone.name] = []
+        
+        # If we have fewer targets than drones, distribute targets more evenly
+        # This ensures the first drone gets targets when possible
+        if len(self.targets) < len(self.drones):
+            # Count how many drones have targets
+            drones_with_targets = sum(1 for indices in assignments.values() if indices)
+            # If some drones don't have targets but we have targets, redistribute
+            if drones_with_targets < len(self.drones) and len(self.targets) > 0:
+                # Collect all target indices
+                all_target_indices = []
+                for indices in assignments.values():
+                    all_target_indices.extend(indices)
+                
+                # Remove duplicates and sort
+                all_target_indices = sorted(set(all_target_indices))
+                
+                # Redistribute evenly among all drones
+                assignments = {}
+                targets_per_drone = len(all_target_indices) // len(self.drones)
+                remainder = len(all_target_indices) % len(self.drones)
+                
+                target_idx = 0
+                for i, drone in enumerate(self.drones):
+                    num_targets = targets_per_drone + (1 if i < remainder else 0)
+                    assignments[drone.name] = all_target_indices[target_idx:target_idx + num_targets]
+                    target_idx += num_targets
         
         return assignments
     

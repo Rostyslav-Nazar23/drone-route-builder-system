@@ -2,9 +2,11 @@
 import json
 from typing import List, Optional
 from pathlib import Path
-from shapely.geometry import shape, BaseGeometry
+from shapely.geometry import shape
+from shapely.geometry.base import BaseGeometry
 from shapely.validation import make_valid
 from app.domain.constraints import NoFlyZone
+from app.domain.waypoint import Waypoint
 from app.data_import.validators import validate_geojson_geometry
 
 
@@ -79,8 +81,6 @@ def load_waypoints_from_geojson(file_path: str) -> List[Waypoint]:
     Returns:
         List of Waypoint objects
     """
-    from app.domain.waypoint import Waypoint
-    
     with open(file_path, 'r', encoding='utf-8') as f:
         geojson_data = json.load(f)
     

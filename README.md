@@ -26,37 +26,53 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 ```
 
-3. (Опційно) Налаштуйте PostgreSQL/PostGIS:
+3. (Опційно) Налаштуйте PostgreSQL/PostGIS через Docker:
 ```bash
-# Встановіть PostgreSQL з PostGIS розширенням
-# Створіть базу даних:
-createdb drone_routes
-psql -d drone_routes -c "CREATE EXTENSION postgis;"
+# Запустити базу даних (рекомендовано)
+docker-compose up -d
 
-# Або встановіть через Docker:
-docker run --name postgis -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgis/postgis
+# Або вручну:
+docker run --name drone-routes-db \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=drone_routes \
+  -p 5432:5432 \
+  -d postgis/postgis:15-3.3
 ```
 
-Встановіть змінну оточення для підключення до БД (опційно):
+Встановіть змінну оточення для підключення до БД:
 ```bash
+# Windows (PowerShell)
+$env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/drone_routes"
+
+# Linux/Mac
 export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/drone_routes"
 ```
 
+> 📖 **Детальна інструкція:** Дивіться [DOCKER_SETUP.md](DOCKER_SETUP.md) для повної документації
+
 ## Запуск
 
-### Streamlit UI (рекомендовано)
-```bash
-streamlit run app/streamlit_app.py
-```
+### Швидкий старт
 
-Відкрийте браузер за адресою http://localhost:8501
+1. **Встановіть залежності:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-### FastAPI Backend
-```bash
-uvicorn app.main:app --reload
-```
+2. **Запустіть Streamlit UI (рекомендовано):**
+   ```bash
+   streamlit run app/streamlit_app.py
+   ```
+   Відкрийте браузер за адресою: **http://localhost:8501**
 
-API документація доступна за адресою http://localhost:8000/docs
+3. **Або запустіть FastAPI Backend:**
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+   API документація: **http://localhost:8000/docs**
+
+> 📖 **Детальна інструкція:** Дивіться [QUICKSTART.md](QUICKSTART.md) для покрокових інструкцій та прикладів
 
 ## Використання
 

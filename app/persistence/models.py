@@ -14,6 +14,8 @@ class MissionModel(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
+    finish_point_type = Column(String(50), default="depot")  # "depot", "last_target", or "custom"
+    landing_mode = Column(String(50), default="vertical")  # "vertical" or "gradual"
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -78,6 +80,8 @@ class RouteModel(Base):
     max_altitude = Column(Float, nullable=True)
     min_altitude = Column(Float, nullable=True)
     waypoint_count = Column(Integer, nullable=True)
+    risk_score = Column(Float, nullable=True)  # Risk score (0-1)
+    avg_speed = Column(Float, nullable=True)  # Average speed (m/s)
     validation_result = Column(JSON, nullable=True)
     
     # Relationships
@@ -96,6 +100,7 @@ class RouteWaypointModel(Base):
     longitude = Column(Float, nullable=False)
     altitude = Column(Float, nullable=False)
     name = Column(String(255), nullable=True)
+    waypoint_type = Column(String(50), default="intermediate")  # target, depot, finish, intermediate, landing_approach, landing_segment
     
     # Spatial index
     location = Column(Geometry('POINT', srid=4326), nullable=True)

@@ -82,6 +82,14 @@ class ConstraintChecker:
         for violation in altitude_violations:
             result.add_violation("altitude", violation["message"], violation.get("waypoint_index"))
         
+        # Add warning for gradual landing only if there's no landing_approach waypoint
+        # landing_approach indicates vertical landing, so no warning needed
+        has_landing_segment = any(wp.waypoint_type == "landing_segment" for wp in route.waypoints)
+        has_landing_approach = any(wp.waypoint_type == "landing_approach" for wp in route.waypoints)
+        if has_landing_segment and not has_landing_approach:
+            # Only show warning for gradual landing (no landing_approach means gradual descent)
+            result.add_warning("landing", "Route uses gradual landing approach. Drone may fly below minimum flight altitude while descending from last target to finish point. This is expected behavior.")
+        
         # Check energy
         energy_result = self.energy_checker.check_route(route, drone)
         if not energy_result["is_valid"]:

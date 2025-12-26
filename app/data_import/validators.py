@@ -2,7 +2,8 @@
 from typing import List, Tuple, Optional
 from app.domain.waypoint import Waypoint
 from app.domain.constraints import NoFlyZone
-from shapely.geometry import Point, Polygon, shape, BaseGeometry
+from shapely.geometry import Point, Polygon, shape
+from shapely.geometry.base import BaseGeometry
 from shapely.validation import make_valid
 
 

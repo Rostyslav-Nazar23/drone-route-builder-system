@@ -22,10 +22,13 @@ async def export_route_plan(mission_name: str, drone_name: str):
     if not route:
         raise HTTPException(status_code=404, detail="Route not found")
     
+    # Find drone for this route
+    drone = next((d for d in mission.drones if d.name == drone_name), None)
+    
     # Create temporary file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.plan', delete=False, encoding='utf-8') as f:
         temp_path = f.name
-        PlanExporter.export_route(route, temp_path)
+        PlanExporter.export_route(route, temp_path, drone=drone, mission=mission)
     
     return FileResponse(
         temp_path,

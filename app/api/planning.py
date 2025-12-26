@@ -10,7 +10,6 @@ router = APIRouter(prefix="/api/planning", tags=["planning"])
 
 class PlanningRequest(BaseModel):
     mission_name: str
-    use_grid: bool = True
 
 
 @router.post("/plan", response_model=dict)
@@ -22,7 +21,10 @@ async def plan_mission(request: PlanningRequest):
     mission = missions_store[request.mission_name]
     orchestrator = MissionOrchestrator(mission)
     
-    routes = orchestrator.plan_mission(use_grid=request.use_grid)
+    routes, error_message = orchestrator.plan_mission()
+    
+    if error_message:
+        raise HTTPException(status_code=400, detail=error_message)
     
     return {
         "mission_name": request.mission_name,
@@ -31,7 +33,7 @@ async def plan_mission(request: PlanningRequest):
 
 
 @router.post("/replan", response_model=dict)
-async def replan_route(mission_name: str, drone_name: str, use_grid: bool = True):
+async def replan_route(mission_name: str, drone_name: str):
     """Replan route for a specific drone."""
     if mission_name not in missions_store:
         raise HTTPException(status_code=404, detail="Mission not found")
@@ -39,7 +41,7 @@ async def replan_route(mission_name: str, drone_name: str, use_grid: bool = True
     mission = missions_store[mission_name]
     orchestrator = MissionOrchestrator(mission)
     
-    route = orchestrator.replan_route(drone_name, use_grid=use_grid)
+    route = orchestrator.replan_route(drone_name)
     
     if not route:
         raise HTTPException(status_code=400, detail="Failed to plan route")

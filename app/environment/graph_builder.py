@@ -7,24 +7,33 @@ from app.environment.navigation_graph import NavigationGraph
 from app.environment.cost_model import CostModel
 from app.domain.drone import Drone
 from app.weather.weather_provider import WeatherConditions
+from app.weather.weather_manager import WeatherManager
 
 
 class GraphBuilder:
     """Builder for creating navigation graphs."""
     
     def __init__(self, drone: Drone, constraints: Optional[MissionConstraints] = None,
-                 weather_data: Optional[Dict[tuple[float, float], WeatherConditions]] = None):
+                 weather_data: Optional[Dict[tuple[float, float], WeatherConditions]] = None,
+                 weather_manager: Optional[WeatherManager] = None):
         """Initialize graph builder.
         
         Args:
             drone: Drone capabilities
             constraints: Mission constraints
-            weather_data: Dictionary mapping (lat, lon) to WeatherConditions (optional)
+            weather_data: Dictionary mapping (lat, lon) to WeatherConditions (optional, initial cache)
+            weather_manager: WeatherManager instance for dynamic weather fetching (optional)
         """
         self.drone = drone
         self.constraints = constraints or MissionConstraints()
-        self.weather_data = weather_data
-        self.cost_model = CostModel(drone, constraints, weather_data)
+        self.weather_data = weather_data or {}
+        self.weather_manager = weather_manager
+        
+        # Update weather_data from weather_manager if available
+        if weather_manager:
+            self.weather_data = weather_manager.get_all_weather_data()
+        
+        self.cost_model = CostModel(drone, constraints, self.weather_data, weather_manager=weather_manager)
     
     def build_grid_graph(self, 
                         center_lat: float,
@@ -50,7 +59,7 @@ class GraphBuilder:
         Returns:
             NavigationGraph instance
         """
-        graph = NavigationGraph()
+        graph = NavigationGraph(cost_model=self.cost_model)
         
         # Calculate grid dimensions
         lat_per_meter = 1.0 / 111320.0  # Approximate
@@ -117,12 +126,18 @@ class GraphBuilder:
         Returns:
             NavigationGraph instance
         """
-        graph = NavigationGraph()
+        graph = NavigationGraph(cost_model=self.cost_model)
         
         # Add all waypoints as nodes
         for idx, wp in enumerate(waypoints):
             node_id = f"wp_{idx}"
-            graph.add_node(node_id, wp.latitude, wp.longitude, wp.altitude)
+            graph.add_node(
+                node_id, 
+                wp.latitude, 
+                wp.longitude, 
+                wp.altitude,
+                waypoint_type=wp.waypoint_type
+            )
         
         # Connect waypoints
         for i, wp1 in enumerate(waypoints):
@@ -158,15 +173,26 @@ class GraphBuilder:
         # Connect if within drone's max range
         return distance <= self.drone.max_range
     
-    def _add_edge_if_valid(self, graph: NavigationGraph, node1: str, node2: str):
-        """Add edge to graph if it's valid."""
+    def _add_edge_if_valid(self, graph: NavigationGraph, node1: str, node2: str,
+                          is_node1_ground: bool = False, is_node2_ground: bool = False):
+        """Add edge to graph if it's valid.
+        
+        Args:
+            graph: Navigation graph
+            node1: First node ID
+            node2: Second node ID
+            is_node1_ground: If True, node1 is depot/finish (skip min altitude check)
+            is_node2_ground: If True, node2 is depot/finish (skip min altitude check)
+        """
         pos1 = graph.get_node_position(node1)
         pos2 = graph.get_node_position(node2)
         
         # Check if edge is valid
         is_valid, error = self.cost_model.is_valid_edge(
             pos1[1], pos1[0], pos1[2],  # lat, lon, alt
-            pos2[1], pos2[0], pos2[2]
+            pos2[1], pos2[0], pos2[2],
+            is_start_ground=is_node1_ground,
+            is_end_ground=is_node2_ground
         )
         
         if is_valid:

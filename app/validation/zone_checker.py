@@ -40,15 +40,16 @@ class ZoneChecker:
             wp1 = route.waypoints[idx]
             wp2 = route.waypoints[idx + 1]
             
-            # Create line segment
-            line = LineString([
-                Point(wp1.longitude, wp1.latitude, wp1.altitude),
-                Point(wp2.longitude, wp2.latitude, wp2.altitude)
+            # Create 2D line segment for intersection check (Shapely doesn't support 3D LineString intersection with 2D geometry)
+            line_2d = LineString([
+                (wp1.longitude, wp1.latitude),
+                (wp2.longitude, wp2.latitude)
             ])
             
             for zone in constraints.no_fly_zones:
-                if zone.geometry.intersects(line):
-                    # Check altitude range
+                # Check if 2D line intersects zone geometry
+                if zone.geometry.intersects(line_2d):
+                    # Check altitude range - the segment intersects if altitude ranges overlap
                     min_alt = min(wp1.altitude, wp2.altitude)
                     max_alt = max(wp1.altitude, wp2.altitude)
                     

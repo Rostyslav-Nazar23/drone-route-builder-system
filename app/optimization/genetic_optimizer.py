@@ -2,9 +2,11 @@
 from typing import List, Dict, Optional, Tuple
 import random
 import copy
+from shapely.geometry import LineString, Point
 from app.domain.route import Route
 from app.domain.waypoint import Waypoint
 from app.domain.drone import Drone
+from app.domain.constraints import MissionConstraints
 
 
 class GeneticOptimizer:
@@ -14,7 +16,8 @@ class GeneticOptimizer:
                  population_size: int = 50,
                  generations: int = 100,
                  mutation_rate: float = 0.1,
-                 crossover_rate: float = 0.7):
+                 crossover_rate: float = 0.7,
+                 constraints: Optional[MissionConstraints] = None):
         """Initialize genetic optimizer.
         
         Args:
@@ -24,9 +27,11 @@ class GeneticOptimizer:
             generations: Number of generations
             mutation_rate: Probability of mutation
             crossover_rate: Probability of crossover
+            constraints: Mission constraints (for no-fly zone checking)
         """
         self.route = route
         self.drone = drone
+        self.constraints = constraints
         self.population_size = population_size
         self.generations = generations
         self.mutation_rate = mutation_rate
@@ -76,7 +81,7 @@ class GeneticOptimizer:
         final_fitness = [self._fitness(individual) for individual in population]
         best_idx = max(range(len(population)), key=lambda i: final_fitness[i])
         best_route = Route(waypoints=population[best_idx], drone_name=self.route.drone_name)
-        best_route.calculate_metrics(self.drone)
+        best_route.calculate_metrics(self.drone, None)  # No weather data in genetic optimizer
         
         return best_route
     
@@ -106,9 +111,16 @@ class GeneticOptimizer:
         - Total distance (shorter is better)
         - Energy consumption (lower is better)
         - Smoothness (fewer sharp turns is better)
+        - No-fly zone violations (heavily penalized)
         """
         if len(waypoints) < 2:
             return 0.0
+        
+        # Check for no-fly zone violations first (heavily penalize)
+        no_fly_penalty = self._check_no_fly_zones(waypoints)
+        if no_fly_penalty > 0:
+            # Heavily penalize routes that cross no-fly zones
+            return 0.001 / (1.0 + no_fly_penalty)  # Very low fitness
         
         # Calculate total distance
         total_distance = 0.0
@@ -143,6 +155,50 @@ class GeneticOptimizer:
         
         fitness = 1.0 / (1.0 + distance_norm + energy_norm + turn_norm)
         return fitness
+    
+    def _check_no_fly_zones(self, waypoints: List[Waypoint]) -> float:
+        """Check if route intersects no-fly zones. Returns penalty value.
+        
+        Args:
+            waypoints: List of waypoints to check
+            
+        Returns:
+            Penalty value (0 if no violations, >0 if violations found)
+        """
+        if not self.constraints or not self.constraints.no_fly_zones:
+            return 0.0
+        
+        penalty = 0.0
+        
+        # Check each waypoint
+        for waypoint in waypoints:
+            point = Point(waypoint.longitude, waypoint.latitude)
+            for zone in self.constraints.no_fly_zones:
+                if zone.contains(point, waypoint.altitude):
+                    penalty += 10000.0  # Heavy penalty for waypoint in zone
+        
+        # Check route segments
+        for i in range(len(waypoints) - 1):
+            wp1 = waypoints[i]
+            wp2 = waypoints[i + 1]
+            
+            # Create 2D line segment for intersection check
+            line_2d = LineString([
+                (wp1.longitude, wp1.latitude),
+                (wp2.longitude, wp2.latitude)
+            ])
+            
+            for zone in self.constraints.no_fly_zones:
+                # Check if 2D line intersects zone geometry
+                if zone.geometry.intersects(line_2d):
+                    # Check altitude range
+                    min_alt = min(wp1.altitude, wp2.altitude)
+                    max_alt = max(wp1.altitude, wp2.altitude)
+                    
+                    if zone.min_altitude <= max_alt and zone.max_altitude >= min_alt:
+                        penalty += 10000.0  # Heavy penalty for segment crossing zone
+        
+        return penalty
     
     def _select_parents(self, population: List[List[Waypoint]], 
                         fitness_scores: List[float]) -> List[List[Waypoint]]:

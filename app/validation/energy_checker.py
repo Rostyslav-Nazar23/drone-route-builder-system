@@ -22,7 +22,7 @@ class EnergyChecker:
         
         # Calculate metrics if not already calculated
         if route.metrics is None:
-            route.calculate_metrics(drone)
+            route.calculate_metrics(drone, None)  # No weather data in energy checker
         
         total_energy = route.metrics.total_energy
         battery_capacity = drone.battery_capacity

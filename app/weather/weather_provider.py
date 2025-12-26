@@ -17,19 +17,13 @@ class WeatherConditions:
     # Wind conditions
     wind_speed_10m: float  # m/s at 10m altitude
     wind_direction_10m: float  # degrees (0-360)
-    wind_speed_80m: Optional[float] = None  # m/s at 80m altitude
-    wind_direction_80m: Optional[float] = None  # degrees
-    
-    # Temperature
     temperature_2m: float  # Celsius
     
-    # Precipitation
+    # Optional fields with defaults (must come after required fields)
+    wind_speed_80m: Optional[float] = None  # m/s at 80m altitude
+    wind_direction_80m: Optional[float] = None  # degrees
     precipitation: float = 0.0  # mm
-    
-    # Cloud cover
     cloud_cover: float = 0.0  # percentage (0-100)
-    
-    # Visibility
     visibility: Optional[float] = None  # km
     
     def get_wind_speed_at_altitude(self, altitude_m: float) -> float:

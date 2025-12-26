@@ -15,6 +15,9 @@ class Mission:
     drones: List[Drone] = field(default_factory=list)
     target_points: List[Waypoint] = field(default_factory=list)
     depot: Optional[Waypoint] = None
+    finish_point: Optional[Waypoint] = None  # Custom finish point
+    finish_point_type: str = "depot"  # "depot", "last_target", or "custom"
+    landing_mode: str = "vertical"  # "vertical" (fly to finish at min alt, then land) or "gradual" (descend from last target to finish)
     constraints: Optional[MissionConstraints] = None
     routes: Dict[str, Route] = field(default_factory=dict)  # drone_name -> Route
     created_at: Optional[datetime] = None
@@ -45,6 +48,12 @@ class Mission:
         self.depot = waypoint
         self.updated_at = datetime.now()
     
+    def set_finish_point(self, waypoint: Waypoint):
+        """Set the finish/end point."""
+        waypoint.waypoint_type = "finish"
+        self.finish_point = waypoint
+        self.updated_at = datetime.now()
+    
     def add_route(self, drone_name: str, route: Route):
         """Add a route for a specific drone."""
         route.drone_name = drone_name
@@ -62,6 +71,9 @@ class Mission:
             "drones": [drone.to_dict() for drone in self.drones],
             "target_points": [tp.to_dict() for tp in self.target_points],
             "depot": self.depot.to_dict() if self.depot else None,
+            "finish_point": self.finish_point.to_dict() if self.finish_point else None,
+            "finish_point_type": self.finish_point_type,
+            "landing_mode": self.landing_mode,
             "constraints": self.constraints.to_dict() if self.constraints else None,
             "routes": {name: route.to_dict() for name, route in self.routes.items()},
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -77,6 +89,9 @@ class Mission:
         drones = [Drone.from_dict(d) for d in data.get("drones", [])]
         target_points = [Waypoint.from_dict(tp) for tp in data.get("target_points", [])]
         depot = Waypoint.from_dict(data["depot"]) if data.get("depot") else None
+        finish_point = Waypoint.from_dict(data["finish_point"]) if data.get("finish_point") else None
+        finish_point_type = data.get("finish_point_type", "depot")
+        landing_mode = data.get("landing_mode", "vertical")
         
         constraints = None
         if data.get("constraints"):
@@ -110,6 +125,9 @@ class Mission:
             drones=drones,
             target_points=target_points,
             depot=depot,
+            finish_point=finish_point,
+            finish_point_type=finish_point_type,
+            landing_mode=landing_mode,
             constraints=constraints,
             routes=routes,
             created_at=created_at,

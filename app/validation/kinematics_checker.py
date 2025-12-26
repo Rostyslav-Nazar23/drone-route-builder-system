@@ -104,6 +104,14 @@ class KinematicsChecker:
             wp1 = route.waypoints[i]
             wp2 = route.waypoints[i + 1]
             
+            # Skip kinematic check for landing segments/approach (vertical landing allows rapid descent)
+            # These segments are part of the landing sequence and may have rapid altitude changes
+            if (wp1.waypoint_type in ["landing_segment", "landing_approach"] or
+                wp2.waypoint_type in ["landing_segment", "landing_approach", "finish", "depot"]):
+                # For vertical landing, the descent from landing_approach to finish is vertical (not constrained by descent rate)
+                # For landing_segment, we're maintaining altitude before vertical descent
+                continue
+            
             # Calculate heading
             heading1 = self._calculate_heading(wp1, wp2)
             heading2 = heading1  # Assume same heading for next segment
