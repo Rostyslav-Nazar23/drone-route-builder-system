@@ -266,17 +266,20 @@ with st.sidebar:
                     constraints=MissionConstraints()
                 )
             else:
-                # Update drones list if mission already exists
+                # Update mission name and drones list if mission already exists
+                st.session_state.mission.name = mission_name
                 st.session_state.mission.drones = drones
             
             waypoint = Waypoint(
                 latitude=wp_lat,
                 longitude=wp_lon,
                 altitude=wp_alt,
-                name=wp_name if wp_name else None
+                name=wp_name if wp_name else None,
+                waypoint_type="target"  # Explicitly set as target
             )
             st.session_state.mission.add_target_point(waypoint)
-            st.success(f"Added waypoint: {wp_name or 'Unnamed'}")
+            st.success(f"Added waypoint: {wp_name or 'Unnamed'} at ({wp_lat:.6f}, {wp_lon:.6f})")
+            # Force rerun to update the map
             st.rerun()
     
     # File import
@@ -301,7 +304,8 @@ with st.sidebar:
                         constraints=MissionConstraints()
                     )
                 else:
-                    # Update drones list if mission already exists
+                    # Update mission name and drones list if mission already exists
+                    st.session_state.mission.name = mission_name
                     st.session_state.mission.drones = drones
                 
                 for wp in waypoints:
@@ -771,7 +775,8 @@ with st.sidebar:
         if st.session_state.mission is None or not st.session_state.mission.target_points:
             st.error("Please add target points first")
         else:
-            # Ensure mission has the latest drones list
+            # Ensure mission has the latest name and drones list
+            st.session_state.mission.name = mission_name
             st.session_state.mission.drones = drones
             
             with st.spinner("Planning route..."):
@@ -824,7 +829,11 @@ if st.session_state.mission:
     # Display mission info
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Target Points", len(mission.target_points))
+        target_count = len(mission.target_points)
+        st.metric("Target Points", target_count)
+        # Debug: show if waypoints exist
+        if target_count > 0:
+            st.caption(f"Waypoints: {', '.join([f'{i+1}: ({wp.latitude:.4f}, {wp.longitude:.4f})' for i, wp in enumerate(mission.target_points[:5])])}")
     with col2:
         st.metric("Drones", len(mission.drones))
     with col3:
@@ -853,7 +862,9 @@ if st.session_state.mission:
     )
     
     # Display map with coordinate tracking
-    map_data = st_folium(map_obj, width=1200, height=600, returned_objects=["last_object_clicked", "last_clicked"])
+    # Use a key based on mission state to force map refresh when waypoints change
+    map_key = f"mission_map_{len(mission.target_points)}_{hash(str(mission.target_points))}"
+    map_data = st_folium(map_obj, width=1200, height=600, key=map_key, returned_objects=["last_object_clicked", "last_clicked"])
     
     # Display coordinates info below map
     if map_data and map_data.get("last_clicked"):
@@ -870,12 +881,15 @@ if st.session_state.mission:
         
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.info(f"Save {len(st.session_state.routes)} route(s) for mission '{mission.name}' to database")
+            st.info(f"Save {len(st.session_state.routes)} route(s) for mission '{mission_name}' to database")
         with col2:
             if st.button("💾 Save Mission", type="primary", use_container_width=True, key="save_mission_db"):
                 try:
                     db = next(get_db())
                     repo = MissionRepository(db)
+                    
+                    # Update mission name from input field
+                    mission.name = mission_name
                     
                     # Update mission with current routes
                     mission.routes = st.session_state.routes
@@ -884,7 +898,7 @@ if st.session_state.mission:
                     mission_model = repo.save_or_create(mission)
                     db.close()
                     
-                    st.success(f"✅ Mission '{mission.name}' saved successfully to database!")
+                    st.success(f"✅ Mission '{mission_name}' saved successfully to database!")
                     st.balloons()
                 except Exception as e:
                     st.error(f"❌ Error saving mission: {str(e)}")

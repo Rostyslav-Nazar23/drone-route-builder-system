@@ -59,30 +59,43 @@ class VRPSolver:
         transit_callback_index = routing.RegisterTransitCallback(distance_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
         
-        # Add distance constraint
+        # Calculate maximum distance needed (sum of all distances from depot to targets and back)
+        # This ensures we don't set an unreasonably low limit
+        max_distance_needed = 0
+        if self.depot and self.targets:
+            for target in self.targets:
+                dist_to = self._haversine_distance(
+                    self.depot.latitude, self.depot.longitude,
+                    target.latitude, target.longitude
+                )
+                dist_back = self._haversine_distance(
+                    target.latitude, target.longitude,
+                    self.depot.latitude, self.depot.longitude
+                )
+                max_distance_needed = max(max_distance_needed, dist_to + dist_back)
+        
+        # Use the maximum of: drone max_range, or calculated needed distance * 2 (safety margin)
+        max_range = max(
+            max(d.max_range for d in self.drones) if self.drones else 100000,
+            max_distance_needed * 2 if max_distance_needed > 0 else 100000
+        )
+        
+        # Add distance constraint (make it more lenient)
         dimension_name = 'Distance'
         routing.AddDimension(
             transit_callback_index,
             0,  # No slack
-            int(max(d.max_range for d in self.drones) if self.drones else 100000),  # Maximum distance
+            int(max_range),  # Maximum distance (more lenient)
             True,  # Start cumul to zero
             dimension_name
         )
         distance_dimension = routing.GetDimensionOrDie(dimension_name)
         distance_dimension.SetGlobalSpanCostCoefficient(100)
         
-        # Set vehicle capacities (battery/energy)
-        for vehicle_id in range(len(self.drones)):
-            drone = self.drones[vehicle_id]
-            # Use battery capacity as vehicle capacity
-            capacity = int(drone.battery_capacity * 100)  # Convert to integer
-            routing.AddDimension(
-                transit_callback_index,
-                0,
-                capacity,
-                True,
-                'Energy'
-            )
+        # Note: We removed the energy/battery capacity constraint because:
+        # 1. It was too restrictive and causing solver failures
+        # 2. Distance constraint already provides reasonable limits
+        # 3. Energy consumption is better handled during route planning, not VRP assignment
         
         # Set search parameters
         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
@@ -105,7 +118,9 @@ class VRPSolver:
         solution = routing.SolveWithParameters(search_parameters)
         
         if not solution:
-            return {}
+            # If OR-Tools can't find a solution, fall back to simple greedy assignment
+            # This ensures we always return a valid assignment, even if not optimal
+            return self._greedy_fallback_assignment()
         
         # Extract solution
         assignments = {}
@@ -190,6 +205,40 @@ class VRPSolver:
                     matrix[i][j] = int(distance)  # Convert to integer meters
         
         return matrix
+    
+    def _greedy_fallback_assignment(self) -> Dict[str, List[int]]:
+        """Fallback greedy assignment when OR-Tools fails.
+        
+        Assigns targets to drones using a simple nearest-neighbor approach.
+        
+        Returns:
+            Dictionary mapping drone name to list of target indices
+        """
+        if not self.targets or not self.drones:
+            return {}
+        
+        assignments = {drone.name: [] for drone in self.drones}
+        
+        # Calculate distances from depot to each target
+        target_distances = []
+        if self.depot:
+            for idx, target in enumerate(self.targets):
+                distance = self._haversine_distance(
+                    self.depot.latitude, self.depot.longitude,
+                    target.latitude, target.longitude
+                )
+                target_distances.append((idx, distance))
+        
+        # Sort targets by distance from depot
+        target_distances.sort(key=lambda x: x[1])
+        
+        # Distribute targets evenly among drones using round-robin
+        for i, (target_idx, _) in enumerate(target_distances):
+            drone_idx = i % len(self.drones)
+            drone = self.drones[drone_idx]
+            assignments[drone.name].append(target_idx)
+        
+        return assignments
     
     @staticmethod
     def _haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

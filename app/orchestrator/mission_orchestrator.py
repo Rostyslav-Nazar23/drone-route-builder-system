@@ -26,7 +26,7 @@ class MissionOrchestrator:
         """
         from datetime import datetime
         self.mission = mission
-        self.weather_data = weather_data
+        self.weather_data = weather_data if weather_data is not None else {}
         self.use_weather = use_weather
         self.weather_timestamp = weather_timestamp or datetime.now()
         self.planner = RoutePlanner(mission, weather_data, use_weather=use_weather, weather_timestamp=self.weather_timestamp)
@@ -179,9 +179,13 @@ class MissionOrchestrator:
                     )
                     
                     # Update weather_data from temp_planner
+                    if self.weather_data is None:
+                        self.weather_data = {}
                     if hasattr(temp_planner, 'weather_manager') and temp_planner.weather_manager:
-                        self.weather_data.update(temp_planner.weather_manager.get_all_weather_data())
-                    elif hasattr(temp_planner, 'weather_data'):
+                        weather_update = temp_planner.weather_manager.get_all_weather_data()
+                        if weather_update:
+                            self.weather_data.update(weather_update)
+                    elif hasattr(temp_planner, 'weather_data') and temp_planner.weather_data:
                         self.weather_data.update(temp_planner.weather_data)
                     
                     if route:

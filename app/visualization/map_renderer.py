@@ -184,18 +184,31 @@ class MapRenderer:
         Returns:
             Folium Map object
         """
-        # Determine center
+        # Determine center and fit bounds to show all points
+        all_points = []
         if mission.depot:
-            center_lat = mission.depot.latitude
-            center_lon = mission.depot.longitude
-        elif mission.target_points:
-            center_lat = sum(tp.latitude for tp in mission.target_points) / len(mission.target_points)
-            center_lon = sum(tp.longitude for tp in mission.target_points) / len(mission.target_points)
+            all_points.append([mission.depot.latitude, mission.depot.longitude])
+        if mission.finish_point:
+            all_points.append([mission.finish_point.latitude, mission.finish_point.longitude])
+        for tp in mission.target_points:
+            all_points.append([tp.latitude, tp.longitude])
+        
+        if all_points:
+            # Calculate center from all points
+            center_lat = sum(p[0] for p in all_points) / len(all_points)
+            center_lon = sum(p[1] for p in all_points) / len(all_points)
+            # Use a zoom level that shows all points
+            # If we have multiple points, we'll fit bounds later
+            if len(all_points) == 1:
+                zoom_start = 15  # Closer zoom for single point
+            else:
+                zoom_start = self.zoom_start
         else:
             center_lat = self.center_lat
             center_lon = self.center_lon
+            zoom_start = self.zoom_start
         
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=self.zoom_start)
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom_start)
         
         # Add no-fly zones
         if mission.constraints:
@@ -274,7 +287,32 @@ class MapRenderer:
             ).add_to(m)
         
         # Add target points - червоні маркери with weather info
-        for idx, target in enumerate(mission.target_points):
+        # Skip target points that are the same as depot or finish point to avoid overlapping markers
+        target_index = 0  # Track actual target index (excluding skipped ones)
+        for target in mission.target_points:
+            # Check if this target point is the same as depot (within small tolerance)
+            is_depot = False
+            if mission.depot:
+                depot_key = (round(mission.depot.latitude, 4), round(mission.depot.longitude, 4))
+                target_key = (round(target.latitude, 4), round(target.longitude, 4))
+                if depot_key == target_key:
+                    is_depot = True
+            
+            # Check if this target point is the same as finish point (within small tolerance)
+            is_finish = False
+            if mission.finish_point:
+                finish_key = (round(mission.finish_point.latitude, 4), round(mission.finish_point.longitude, 4))
+                target_key = (round(target.latitude, 4), round(target.longitude, 4))
+                if finish_key == target_key:
+                    is_finish = True
+            
+            # Skip this target if it's the same as depot or finish (they're already shown as START/FINISH)
+            if is_depot or is_finish:
+                continue
+            
+            # Increment target index only for displayed targets
+            target_index += 1
+            
             # Get weather info for this target if available
             weather_info = ""
             if weather_data:
@@ -304,16 +342,16 @@ class MapRenderer:
             
             folium.Marker(
                 location=[target.latitude, target.longitude],
-                popup=f"<b>🎯 Target {idx+1}: {target.name or 'Unnamed'}</b><br>Lat: {target.latitude:.6f}<br>Lon: {target.longitude:.6f}<br>Alt: {target.altitude:.1f}m{weather_info}",
+                popup=f"<b>🎯 Target {target_index}: {target.name or 'Unnamed'}</b><br>Lat: {target.latitude:.6f}<br>Lon: {target.longitude:.6f}<br>Alt: {target.altitude:.1f}m{weather_info}",
                 icon=folium.Icon(color="red", icon="flag", prefix="fa"),
-                tooltip=f"🎯 Target {idx+1}"
+                tooltip=f"🎯 Target {target_index}"
             ).add_to(m)
             
             # Додати коло для виділення
             folium.CircleMarker(
                 location=[target.latitude, target.longitude],
                 radius=8,
-                popup=f"Target {idx+1}",
+                popup=f"Target {target_index}",
                 color="red",
                 fill=True,
                 fillColor="red",
@@ -333,6 +371,13 @@ class MapRenderer:
             # Only add wind arrows, not separate weather markers
             for (lat, lon), weather in weather_data.items():
                 self._add_wind_arrow(m, lat, lon, weather.wind_direction_10m, weather.wind_speed_10m)
+        
+        # Fit map bounds to show all points (depot, targets, finish)
+        if all_points:
+            # Add some padding
+            bounds = [[min(p[0] for p in all_points) - 0.01, min(p[1] for p in all_points) - 0.01],
+                     [max(p[0] for p in all_points) + 0.01, max(p[1] for p in all_points) + 0.01]]
+            m.fit_bounds(bounds, padding=(20, 20))
         
         # Add layer control
         folium.LayerControl().add_to(m)

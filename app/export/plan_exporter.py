@@ -17,6 +17,9 @@ class PlanExporter:
     MAV_CMD_NAV_LOITER_TIME = 19
     MAV_CMD_NAV_LOITER_UNLIM = 17
     MAV_CMD_NAV_LOITER_TURNS = 18
+    MAV_CMD_DO_CHANGE_SPEED = 178  # Change speed command
+    MAV_CMD_CONDITION_YAW = 115  # Set yaw/heading
+    MAV_CMD_NAV_LOITER_TO_ALT = 31  # Loiter to altitude
     
     @staticmethod
     def _calculate_heading(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -115,7 +118,11 @@ class PlanExporter:
         # Get average speed from metrics if available
         avg_speed = route.metrics.avg_speed if route.metrics else None
         
+        # Track previous speed to detect changes
+        previous_speed = None
+        
         # Waypoints
+        waypoint_index = 0  # Track actual waypoint index (may include speed commands)
         for idx, waypoint in enumerate(route.waypoints):
             # Get command based on waypoint type and position
             command = PlanExporter._get_command_for_waypoint(waypoint, idx, len(route.waypoints))
@@ -144,6 +151,42 @@ class PlanExporter:
                 speed = PlanExporter._calculate_speed_for_segment(
                     route.waypoints[idx - 1], waypoint, drone, avg_speed
                 )
+            else:
+                # First waypoint: use default speed
+                speed = PlanExporter._calculate_speed_for_segment(None, None, drone, avg_speed)
+            
+            # Add speed change command if speed changed (except for first waypoint)
+            if previous_speed is not None and abs(speed - previous_speed) > 0.1:  # Speed changed by more than 0.1 m/s
+                # MAV_CMD_DO_CHANGE_SPEED: PARAM1 = speed type (0=air speed, 1=ground speed), PARAM2 = speed (m/s), PARAM3 = throttle (-1=no change), PARAM4 = absolute/relative (0=absolute)
+                speed_cmd = PlanExporter.MAV_CMD_DO_CHANGE_SPEED
+                speed_line = (f"{waypoint_index}\t0\t0\t{speed_cmd}\t"
+                            f"1.0\t{speed:.2f}\t-1.0\t0.0\t"
+                            f"0.0\t0.0\t0.0\t1")
+                lines.append(speed_line)
+                waypoint_index += 1
+            
+            # Calculate heading (yaw) for this waypoint
+            yaw = 0.0  # Default: no yaw change
+            if idx < len(route.waypoints) - 1:
+                # Calculate heading to next waypoint
+                wp1 = waypoint
+                wp2 = route.waypoints[idx + 1]
+                yaw = PlanExporter._calculate_heading(wp1.latitude, wp1.longitude, wp2.latitude, wp2.longitude)
+            elif idx > 0:
+                # Last waypoint: use heading from previous waypoint
+                wp1 = route.waypoints[idx - 1]
+                wp2 = waypoint
+                yaw = PlanExporter._calculate_heading(wp1.latitude, wp1.longitude, wp2.latitude, wp2.longitude)
+            
+            # Add yaw command before waypoint (except for first waypoint which is TAKEOFF)
+            if idx > 0 and command == PlanExporter.MAV_CMD_NAV_WAYPOINT:
+                # MAV_CMD_CONDITION_YAW: PARAM1 = target angle (degrees), PARAM2 = angular speed (deg/s), PARAM3 = direction (-1=shortest, 0=cw, 1=ccw), PARAM4 = relative/absolute (0=absolute)
+                yaw_cmd = PlanExporter.MAV_CMD_CONDITION_YAW
+                yaw_line = (f"{waypoint_index}\t0\t0\t{yaw_cmd}\t"
+                           f"{yaw:.2f}\t45.0\t-1.0\t0.0\t"
+                           f"0.0\t0.0\t0.0\t1")
+                lines.append(yaw_line)
+                waypoint_index += 1
             
             # PARAM1: Hold time (for LOITER) or acceptance radius (for WAYPOINT)
             # For waypoints, use acceptance radius (meters)
@@ -153,12 +196,19 @@ class PlanExporter:
             param2 = 0.0  # Pass through waypoint
             
             # PARAM3: Yaw angle (heading in degrees, 0 = North, -1 = no change)
-            # Use -1 for no yaw change, or specific angle
-            param3 = -1.0  # No yaw change (drone maintains current heading)
-            # Alternatively, can set to yaw value: param3 = yaw
+            # Set to calculated yaw for waypoints, -1 for TAKEOFF/LAND
+            if command == PlanExporter.MAV_CMD_NAV_WAYPOINT:
+                param3 = yaw  # Set yaw for waypoints
+            else:
+                param3 = -1.0  # No yaw change for TAKEOFF/LAND
             
             # PARAM4: Loiter radius (for LOITER commands) or latitude (for some commands)
             param4 = 0.0
+            
+            # For target waypoints, consider adding loiter time
+            if "target" in (waypoint.waypoint_type.lower() if waypoint.waypoint_type else "") and idx < len(route.waypoints) - 1:
+                # Add a small loiter time at target points (2 seconds)
+                param1 = 2.0  # Hold time in seconds for target points
             
             # PARAM5/X: Latitude
             param5 = waypoint.latitude
@@ -179,10 +229,14 @@ class PlanExporter:
             autocontinue = 1
             
             # Format line: INDEX, CURRENT_WP, COORD_FRAME, COMMAND, PARAM1, PARAM2, PARAM3, PARAM4, PARAM5/X, PARAM6/Y, PARAM7/Z, AUTOCONTINUE
-            line = (f"{idx}\t{current_wp}\t{coord_frame}\t{command}\t"
+            line = (f"{waypoint_index}\t{current_wp}\t{coord_frame}\t{command}\t"
                    f"{param1:.6f}\t{param2:.6f}\t{param3:.6f}\t{param4:.6f}\t"
                    f"{param5:.10f}\t{param6:.10f}\t{param7:.2f}\t{autocontinue}")
             lines.append(line)
+            
+            # Update indices
+            waypoint_index += 1
+            previous_speed = speed
         
         # Write to file
         with open(file_path, 'w', encoding='utf-8') as f:

@@ -138,6 +138,12 @@ class MissionRepository:
                 )
                 self.db.add(zone_model)
         
+        # Save routes if they exist
+        if hasattr(mission, 'routes') and mission.routes:
+            for drone_name, route in mission.routes.items():
+                self.save_route(mission_model.id, route, drone_name)
+        
+        # Commit all changes (mission, drones, targets, constraints, routes)
         self.db.commit()
         self.db.refresh(mission_model)
         
@@ -302,6 +308,14 @@ class MissionRepository:
             route: Route domain object
             drone_name: Drone name
         """
+        # Convert validation_result to dict if it's an object
+        validation_result = route.validation_result
+        if validation_result and not isinstance(validation_result, dict):
+            if hasattr(validation_result, 'to_dict'):
+                validation_result = validation_result.to_dict()
+            elif hasattr(validation_result, '__dict__'):
+                validation_result = validation_result.__dict__
+        
         route_model = RouteModel(
             id=uuid.uuid4(),
             mission_id=mission_id,
@@ -314,9 +328,10 @@ class MissionRepository:
             waypoint_count=route.metrics.waypoint_count if route.metrics else None,
             risk_score=route.metrics.risk_score if route.metrics else None,
             avg_speed=route.metrics.avg_speed if route.metrics else None,
-            validation_result=route.validation_result
+            validation_result=validation_result
         )
         self.db.add(route_model)
+        self.db.flush()  # Flush to get route_model.id for waypoints
         
         # Add waypoints
         for idx, waypoint in enumerate(route.waypoints):
@@ -334,7 +349,8 @@ class MissionRepository:
             )
             self.db.add(wp_model)
         
-        self.db.commit()
+        # Note: Don't commit here - let the caller (create/update) handle commits
+        # This allows multiple routes to be saved in a single transaction
     
     def update(self, mission: Mission, mission_id: Optional[uuid.UUID] = None) -> MissionModel:
         """Update existing mission in database.
@@ -372,10 +388,6 @@ class MissionRepository:
             self.db.delete(drone_model)
         for target_model in mission_model.target_points:
             self.db.delete(target_model)
-        if mission_model.constraints:
-            for zone_model in mission_model.constraints.no_fly_zones:
-                self.db.delete(zone_model)
-            self.db.delete(mission_model.constraints)
         
         # Recreate all data
         # Add drones
@@ -442,18 +454,34 @@ class MissionRepository:
             )
             self.db.add(finish_model)
         
-        # Add constraints
+        # Handle constraints: update if exists, create if not
+        existing_constraints = mission_model.constraints
         if mission.constraints:
-            constraints_model = ConstraintsModel(
-                id=uuid.uuid4(),
-                mission_id=mission_model.id,
-                max_altitude=mission.constraints.max_altitude,
-                min_altitude=mission.constraints.min_altitude,
-                max_distance=mission.constraints.max_distance,
-                max_flight_time=mission.constraints.max_flight_time,
-                require_return_to_depot=mission.constraints.require_return_to_depot
-            )
-            self.db.add(constraints_model)
+            if existing_constraints:
+                # Update existing constraints
+                existing_constraints.max_altitude = mission.constraints.max_altitude
+                existing_constraints.min_altitude = mission.constraints.min_altitude
+                existing_constraints.max_distance = mission.constraints.max_distance
+                existing_constraints.max_flight_time = mission.constraints.max_flight_time
+                existing_constraints.require_return_to_depot = mission.constraints.require_return_to_depot
+                
+                # Delete old no-fly zones
+                for zone_model in existing_constraints.no_fly_zones:
+                    self.db.delete(zone_model)
+                
+                constraints_model = existing_constraints
+            else:
+                # Create new constraints
+                constraints_model = ConstraintsModel(
+                    id=uuid.uuid4(),
+                    mission_id=mission_model.id,
+                    max_altitude=mission.constraints.max_altitude,
+                    min_altitude=mission.constraints.min_altitude,
+                    max_distance=mission.constraints.max_distance,
+                    max_flight_time=mission.constraints.max_flight_time,
+                    require_return_to_depot=mission.constraints.require_return_to_depot
+                )
+                self.db.add(constraints_model)
             
             # Add no-fly zones
             for zone in mission.constraints.no_fly_zones:
@@ -466,31 +494,38 @@ class MissionRepository:
                     geometry=from_shape(zone.geometry, srid=4326)
                 )
                 self.db.add(zone_model)
+        elif existing_constraints:
+            # Mission has no constraints, but database has - delete them
+            for zone_model in existing_constraints.no_fly_zones:
+                self.db.delete(zone_model)
+            self.db.delete(existing_constraints)
         
-        # Save routes
-        for drone_name, route in mission.routes.items():
-            self.save_route(mission_model.id, route, drone_name)
+        # Save routes if they exist
+        if hasattr(mission, 'routes') and mission.routes:
+            for drone_name, route in mission.routes.items():
+                self.save_route(mission_model.id, route, drone_name)
         
+        # Commit all changes (mission, drones, targets, constraints, routes)
         self.db.commit()
         self.db.refresh(mission_model)
         
         return mission_model
     
     def save_or_create(self, mission: Mission) -> MissionModel:
-        """Save mission to database (create if new, update if exists).
+        """Save mission to database (always create new mission, even if name exists).
+        
+        Each mission is saved as a new record with a unique ID, allowing multiple
+        missions with the same name to coexist in the database.
         
         Args:
             mission: Mission domain object
         
         Returns:
-            MissionModel instance
+            MissionModel instance (newly created)
         """
-        # Try to find existing mission by name
-        existing = self.get_by_name(mission.name)
-        if existing:
-            return self.update(mission, existing.id)
-        else:
-            return self.create(mission)
+        # Always create a new mission, even if one with the same name exists
+        # This allows multiple missions with the same name but different IDs
+        return self.create(mission)
     
     def delete(self, mission_id: uuid.UUID):
         """Delete mission.
